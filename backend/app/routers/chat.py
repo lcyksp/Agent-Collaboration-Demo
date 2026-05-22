@@ -35,6 +35,7 @@ class ChatStreamRequest(BaseModel):
     api_base: str | None = Field(default=None)
     cloud_model: str | None = Field(default=None)
     local_model: str | None = Field(default=None)
+    agent_prompts: dict[str, str] | None = Field(default=None)
 
 
 class HistoryItem(BaseModel):
@@ -379,6 +380,10 @@ async def stream_chat(request: Request, payload: ChatStreamRequest) -> Streaming
                 "api_base": payload.api_base or "",
                 "cloud_model": payload.cloud_model or "",
                 "local_model": payload.local_model or "",
+                "router_prompt": (payload.agent_prompts or {}).get("router", ""),
+                "rag_prompt": (payload.agent_prompts or {}).get("rag_expert", ""),
+                "code_prompt": (payload.agent_prompts or {}).get("code_architect", ""),
+                "review_prompt": (payload.agent_prompts or {}).get("review", ""),
                 "rewrite_count": 0,
                 "statuses": [],
             }

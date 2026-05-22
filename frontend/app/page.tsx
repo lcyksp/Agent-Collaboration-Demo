@@ -30,6 +30,9 @@ export default function Page() {
     deleteSession,
     modelConfig,
     setModelConfig,
+    agentPrompts,
+    setAgentPrompts,
+    resetAgentPrompts,
     savedApiKeys,
     activeApiKeyId,
     saveCurrentApiKey,
@@ -41,6 +44,7 @@ export default function Page() {
   const [localModels, setLocalModels] = useState<string[]>([]);
   const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
   const [showTrace, setShowTrace] = useState(true);
+  const [showAgentPromptEditor, setShowAgentPromptEditor] = useState(false);
   const [validatingKey, setValidatingKey] = useState(false);
   const [apiKeyValidation, setApiKeyValidation] = useState<null | {
     kind: "success" | "error";
@@ -402,6 +406,45 @@ export default function Page() {
                     选择平台后只需填写 API Key 即可使用，模型与地址由系统默认处理。
                   </div>
                 </>
+              )}
+            </div>
+            <div className="space-y-2 rounded-lg border border-slate-200 p-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-slate-600">Agent 协同角色 Prompt</p>
+                <Button type="button" variant="outline" onClick={() => setShowAgentPromptEditor((v) => !v)}>
+                  {showAgentPromptEditor ? "收起" : "展开"}
+                </Button>
+              </div>
+              {showAgentPromptEditor && (
+                <div className="space-y-2">
+                  <textarea
+                    className="min-h-20 w-full rounded border border-slate-300 px-2 py-2 text-xs"
+                    value={agentPrompts.router}
+                    onChange={(e) => setAgentPrompts({ router: e.target.value })}
+                    placeholder="Router Agent Prompt"
+                  />
+                  <textarea
+                    className="min-h-20 w-full rounded border border-slate-300 px-2 py-2 text-xs"
+                    value={agentPrompts.rag_expert}
+                    onChange={(e) => setAgentPrompts({ rag_expert: e.target.value })}
+                    placeholder="RAG Expert Agent Prompt"
+                  />
+                  <textarea
+                    className="min-h-20 w-full rounded border border-slate-300 px-2 py-2 text-xs"
+                    value={agentPrompts.code_architect}
+                    onChange={(e) => setAgentPrompts({ code_architect: e.target.value })}
+                    placeholder="Code Architect Agent Prompt"
+                  />
+                  <textarea
+                    className="min-h-20 w-full rounded border border-slate-300 px-2 py-2 text-xs"
+                    value={agentPrompts.review}
+                    onChange={(e) => setAgentPrompts({ review: e.target.value })}
+                    placeholder="Review Agent Prompt"
+                  />
+                  <Button type="button" variant="outline" onClick={resetAgentPrompts}>
+                    恢复默认 Prompt
+                  </Button>
+                </div>
               )}
             </div>
           </CardContent>

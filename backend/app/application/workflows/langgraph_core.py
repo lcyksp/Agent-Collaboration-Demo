@@ -28,6 +28,10 @@ class GraphState(TypedDict, total=False):
     api_base: str
     cloud_model: str
     local_model: str
+    router_prompt: str
+    rag_prompt: str
+    code_prompt: str
+    review_prompt: str
     route: Literal["rag", "code", "direct"]
     needs_rag: bool
     retrieved_docs: list[RetrievedDoc]
@@ -108,8 +112,9 @@ def _safe_json(raw: str, fallback: dict[str, Any]) -> dict[str, Any]:
 
 
 async def router_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
+    router_prompt = state.get("router_prompt") or ROUTER_SYSTEM_PROMPT
     result = await runtime.model_gateway.ainvoke(
-        system_prompt=ROUTER_SYSTEM_PROMPT,
+        system_prompt=router_prompt,
         user_prompt=f"用户输入：{state['user_input']}",
         provider=state.get("model_provider", "cloud"),
         cloud_preset=state.get("cloud_preset", "aliyun"),
@@ -131,6 +136,7 @@ async def router_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
 
 
 async def rag_expert_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
+    rag_prompt = state.get("rag_prompt") or RAG_SYSTEM_PROMPT
     docs = await runtime.retriever.search(query=state["user_input"], top_k=5)
     if not docs:
         context = "未检索到可信资料。"
@@ -140,7 +146,7 @@ async def rag_expert_node(state: GraphState, runtime: GraphRuntime) -> GraphStat
         snippets = "\n\n".join([f"[{d['source']}] {d['content']}" for d in docs])
         context = f"检索片段：\n{snippets}\n\n引用来源：\n{refs}"
         rag_answer = await runtime.model_gateway.ainvoke(
-            system_prompt=RAG_SYSTEM_PROMPT,
+            system_prompt=rag_prompt,
             user_prompt=f"问题：{state['user_input']}\n\n{context}",
             provider=state.get("model_provider", "cloud"),
             cloud_preset=state.get("cloud_preset", "aliyun"),
@@ -159,6 +165,7 @@ async def rag_expert_node(state: GraphState, runtime: GraphRuntime) -> GraphStat
 
 
 async def code_architect_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
+    code_prompt = state.get("code_prompt") or CODE_ARCH_SYSTEM_PROMPT
     context = state.get("rag_context", "")
     base = f"用户需求：{state['user_input']}"
     if context:
@@ -167,7 +174,7 @@ async def code_architect_node(state: GraphState, runtime: GraphRuntime) -> Graph
         base += f"\n\n现有草案：\n{state['draft_answer']}"
 
     draft = await runtime.model_gateway.ainvoke(
-        system_prompt=CODE_ARCH_SYSTEM_PROMPT,
+        system_prompt=code_prompt,
         user_prompt=base,
         provider=state.get("model_provider", "cloud"),
         cloud_preset=state.get("cloud_preset", "aliyun"),
@@ -183,8 +190,9 @@ async def code_architect_node(state: GraphState, runtime: GraphRuntime) -> Graph
 
 
 async def review_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
+    review_prompt = state.get("review_prompt") or REVIEW_SYSTEM_PROMPT
     review_raw = await runtime.model_gateway.ainvoke(
-        system_prompt=REVIEW_SYSTEM_PROMPT,
+        system_prompt=review_prompt,
         user_prompt=f"请审查以下输出：\n{state.get('draft_answer', '')}",
         provider=state.get("model_provider", "cloud"),
         cloud_preset=state.get("cloud_preset", "aliyun"),

@@ -36,6 +36,13 @@ export type ModelConfig = {
   localModel: string;
 };
 
+export type AgentPrompts = {
+  router: string;
+  rag_expert: string;
+  code_architect: string;
+  review: string;
+};
+
 export type SavedApiKey = {
   id: string;
   name: string;
@@ -57,6 +64,7 @@ type ChatState = {
   agentTrace: AgentTraceItem[];
   sessionList: string[];
   modelConfig: ModelConfig;
+  agentPrompts: AgentPrompts;
   savedApiKeys: SavedApiKey[];
   activeApiKeyId: string | null;
   setActiveSessionId: (sessionId: string) => void;
@@ -64,6 +72,8 @@ type ChatState = {
   createNewSession: () => void;
   deleteSession: (sessionId: string) => void;
   setModelConfig: (patch: Partial<ModelConfig>) => void;
+  setAgentPrompts: (patch: Partial<AgentPrompts>) => void;
+  resetAgentPrompts: () => void;
   saveCurrentApiKey: () => void;
   selectSavedApiKey: (keyId: string) => void;
   deleteSavedApiKey: (keyId: string) => void;
@@ -72,6 +82,16 @@ type ChatState = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8001";
+const DEFAULT_AGENT_PROMPTS: AgentPrompts = {
+  router:
+    "你是 Router Agent（调度中枢）。分析用户输入并只输出 JSON：{\"route\":\"rag|code|direct\",\"reason\":\"...\",\"needs_rag\":true|false}。",
+  rag_expert:
+    "你是 RAG Expert Agent（知识检索专家）。仅基于检索上下文回答，不得捏造。如果检索不到相关信息，必须明确写出“未检索到可信资料”。输出应包含：结论 + 引用来源列表。",
+  code_architect:
+    "你是 Code Architect Agent（全栈开发专家）。基于需求和可用上下文，输出高内聚低耦合的实现方案与代码。请包含：1) 架构思路（简短） 2) 关键代码。",
+  review:
+    "你是 Review Agent（审查与测试专家）。检查逻辑漏洞、安全风险、API 规范一致性。只输出 JSON：{\"approved\":true|false,\"issues\":[\"...\"],\"suggestion\":\"...\"}。",
+};
 const uid = (): string => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const maskApiKey = (value: string): string => {
   const trimmed = value.trim();
@@ -157,6 +177,7 @@ export const useChatStore = create<ChatState>()(
         cloudModel: "",
         localModel: "gemma3:4b",
       },
+      agentPrompts: DEFAULT_AGENT_PROMPTS,
 
       setActiveSessionId: (sessionId: string) =>
         set((state) => ({
@@ -227,6 +248,9 @@ export const useChatStore = create<ChatState>()(
       },
 
       setModelConfig: (patch: Partial<ModelConfig>) => set((state) => ({ modelConfig: { ...state.modelConfig, ...patch } })),
+      setAgentPrompts: (patch: Partial<AgentPrompts>) =>
+        set((state) => ({ agentPrompts: { ...state.agentPrompts, ...patch } })),
+      resetAgentPrompts: () => set({ agentPrompts: DEFAULT_AGENT_PROMPTS }),
 
       saveCurrentApiKey: () =>
         set((state) => {
@@ -295,6 +319,7 @@ export const useChatStore = create<ChatState>()(
 
         const sessionId = get().activeSessionId;
         const cfg = get().modelConfig;
+        const prompts = get().agentPrompts;
         const userMsg: ChatMessage = { id: uid(), role: "user", content, createdAt: Date.now() };
         const assistantMsg: ChatMessage = { id: uid(), role: "assistant", content: "", createdAt: Date.now() };
         const initialTrace: AgentTraceItem[] = [
@@ -339,6 +364,7 @@ export const useChatStore = create<ChatState>()(
               api_base: cfg.apiBase || null,
               cloud_model: cfg.cloudModel || null,
               local_model: cfg.localModel || null,
+              agent_prompts: prompts,
             }),
           });
 
@@ -495,6 +521,7 @@ export const useChatStore = create<ChatState>()(
           ...state.modelConfig,
           apiKey: "",
         },
+        agentPrompts: state.agentPrompts,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
@@ -508,6 +535,10 @@ export const useChatStore = create<ChatState>()(
           localModel: state.modelConfig?.localModel ?? "gemma3:4b",
         };
         state.modelConfig = mergedModelConfig;
+        state.agentPrompts = {
+          ...DEFAULT_AGENT_PROMPTS,
+          ...(state.agentPrompts ?? {}),
+        };
         state.messages = state.sessionMessages[state.activeSessionId] ?? [];
         state.sessionMeta = state.sessionMeta ?? {};
         state.agentTrace = state.sessionAgentTrace?.[state.activeSessionId] ?? [];
