@@ -2,10 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body {
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
   height: 100%;
+  font-family: "Aptos", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 body {
   margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.1), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.08), transparent 28%),
+    #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(59, 130, 246, 0.18);
 }

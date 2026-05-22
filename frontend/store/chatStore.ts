@@ -43,6 +43,17 @@ export type AgentPrompts = {
   review: string;
 };
 
+export type AgentKind = "router" | "rag" | "generator" | "review" | "custom";
+
+export type AgentConfig = {
+  id: string;
+  name: string;
+  kind: AgentKind;
+  prompt: string;
+  enabled: boolean;
+  order: number;
+};
+
 export type SavedApiKey = {
   id: string;
   name: string;
@@ -65,6 +76,7 @@ type ChatState = {
   sessionList: string[];
   modelConfig: ModelConfig;
   agentPrompts: AgentPrompts;
+  agentConfigs: AgentConfig[];
   savedApiKeys: SavedApiKey[];
   activeApiKeyId: string | null;
   setActiveSessionId: (sessionId: string) => void;
@@ -74,6 +86,7 @@ type ChatState = {
   setModelConfig: (patch: Partial<ModelConfig>) => void;
   setAgentPrompts: (patch: Partial<AgentPrompts>) => void;
   resetAgentPrompts: () => void;
+  setAgentConfigs: (agents: AgentConfig[]) => void;
   saveCurrentApiKey: () => void;
   selectSavedApiKey: (keyId: string) => void;
   deleteSavedApiKey: (keyId: string) => void;
@@ -92,6 +105,12 @@ const DEFAULT_AGENT_PROMPTS: AgentPrompts = {
   review:
     "你是 Review Agent（审查与测试专家）。检查逻辑漏洞、安全风险、API 规范一致性。只输出 JSON：{\"approved\":true|false,\"issues\":[\"...\"],\"suggestion\":\"...\"}。",
 };
+const DEFAULT_AGENT_CONFIGS: AgentConfig[] = [
+  { id: "router", name: "Router Agent", kind: "router", prompt: DEFAULT_AGENT_PROMPTS.router, enabled: true, order: 0 },
+  { id: "rag", name: "RAG Expert Agent", kind: "rag", prompt: DEFAULT_AGENT_PROMPTS.rag_expert, enabled: true, order: 1 },
+  { id: "generator", name: "Code Architect Agent", kind: "generator", prompt: DEFAULT_AGENT_PROMPTS.code_architect, enabled: true, order: 2 },
+  { id: "review", name: "Review Agent", kind: "review", prompt: DEFAULT_AGENT_PROMPTS.review, enabled: true, order: 3 },
+];
 const uid = (): string => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const maskApiKey = (value: string): string => {
   const trimmed = value.trim();
@@ -178,6 +197,7 @@ export const useChatStore = create<ChatState>()(
         localModel: "gemma3:4b",
       },
       agentPrompts: DEFAULT_AGENT_PROMPTS,
+      agentConfigs: DEFAULT_AGENT_CONFIGS,
 
       setActiveSessionId: (sessionId: string) =>
         set((state) => ({
@@ -251,6 +271,12 @@ export const useChatStore = create<ChatState>()(
       setAgentPrompts: (patch: Partial<AgentPrompts>) =>
         set((state) => ({ agentPrompts: { ...state.agentPrompts, ...patch } })),
       resetAgentPrompts: () => set({ agentPrompts: DEFAULT_AGENT_PROMPTS }),
+      setAgentConfigs: (agents: AgentConfig[]) =>
+        set({
+          agentConfigs: [...agents]
+            .sort((a, b) => a.order - b.order)
+            .map((a, idx) => ({ ...a, order: idx })),
+        }),
 
       saveCurrentApiKey: () =>
         set((state) => {
@@ -320,6 +346,7 @@ export const useChatStore = create<ChatState>()(
         const sessionId = get().activeSessionId;
         const cfg = get().modelConfig;
         const prompts = get().agentPrompts;
+        const agents = get().agentConfigs;
         const userMsg: ChatMessage = { id: uid(), role: "user", content, createdAt: Date.now() };
         const assistantMsg: ChatMessage = { id: uid(), role: "assistant", content: "", createdAt: Date.now() };
         const initialTrace: AgentTraceItem[] = [
@@ -365,6 +392,7 @@ export const useChatStore = create<ChatState>()(
               cloud_model: cfg.cloudModel || null,
               local_model: cfg.localModel || null,
               agent_prompts: prompts,
+              agent_configs: agents,
             }),
           });
 
@@ -522,6 +550,7 @@ export const useChatStore = create<ChatState>()(
           apiKey: "",
         },
         agentPrompts: state.agentPrompts,
+        agentConfigs: state.agentConfigs,
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return;
@@ -539,6 +568,10 @@ export const useChatStore = create<ChatState>()(
           ...DEFAULT_AGENT_PROMPTS,
           ...(state.agentPrompts ?? {}),
         };
+        state.agentConfigs =
+          Array.isArray(state.agentConfigs) && state.agentConfigs.length > 0
+            ? state.agentConfigs
+            : DEFAULT_AGENT_CONFIGS;
         state.messages = state.sessionMessages[state.activeSessionId] ?? [];
         state.sessionMeta = state.sessionMeta ?? {};
         state.agentTrace = state.sessionAgentTrace?.[state.activeSessionId] ?? [];

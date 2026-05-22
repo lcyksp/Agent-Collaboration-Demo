@@ -16,7 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.workflows.langgraph_core import GraphRuntime, GraphState, build_graph
+from app.application.workflows.langgraph_core import GraphRuntime, GraphState, _run_dynamic_agent, build_graph
 from app.infrastructure.db.postgres_checkpointer import PostgresStateCheckpointer
 from app.infrastructure.db.session import DatabaseManager
 from app.infrastructure.llm.factory import LiteLLMRouterFactory
@@ -36,6 +36,7 @@ class ChatStreamRequest(BaseModel):
     cloud_model: str | None = Field(default=None)
     local_model: str | None = Field(default=None)
     agent_prompts: dict[str, str] | None = Field(default=None)
+    agent_configs: list[dict[str, Any]] | None = Field(default=None)
 
 
 class HistoryItem(BaseModel):
@@ -336,6 +337,7 @@ async def stream_chat(request: Request, payload: ChatStreamRequest) -> Streaming
         model_gateway=model_gateway,
         retriever=PgVectorRetriever(db_manager=db_manager),
         max_rewrite_rounds=1,
+        agents=payload.agent_configs,
     )
     graph = build_graph(runtime=graph_runtime, checkpointer=None)
 
@@ -384,6 +386,7 @@ async def stream_chat(request: Request, payload: ChatStreamRequest) -> Streaming
                 "rag_prompt": (payload.agent_prompts or {}).get("rag_expert", ""),
                 "code_prompt": (payload.agent_prompts or {}).get("code_architect", ""),
                 "review_prompt": (payload.agent_prompts or {}).get("review", ""),
+                "agent_configs": payload.agent_configs or [],
                 "rewrite_count": 0,
                 "statuses": [],
             }
@@ -394,21 +397,36 @@ async def stream_chat(request: Request, payload: ChatStreamRequest) -> Streaming
             final_answer = ""
             final_state_snapshot: dict[str, Any] = dict(initial_state)
 
-            async for event in graph.astream_events(initial_state, config=stream_config, version="v2"):
-                event_name = event.get("event")
-                if event_name == "on_chain_start":
-                    node = str(event.get("name", "unknown"))
-                    if node in {"router", "rag_expert", "code_architect", "review"}:
-                        yield _sse("agent_status", _status_from_node(node))
-                elif event_name == "on_chain_end":
-                    data = event.get("data", {})
-                    if isinstance(data, dict):
-                        output = data.get("output", {})
-                        if isinstance(output, dict):
-                            final_state_snapshot = {**final_state_snapshot, **output}
-                            candidate = output.get("final_answer") or output.get("draft_answer")
-                            if isinstance(candidate, str) and candidate.strip():
-                                final_answer = candidate
+            dynamic_agents = [a for a in (graph_runtime.agents or []) if bool(a.get("enabled", True))]
+            if dynamic_agents:
+                for agent in dynamic_agents:
+                    yield _sse("agent_status", {"agent": agent.get("name", "Agent"), "status": "running", "content": "正在执行..."})
+                    try:
+                        next_state = await _run_dynamic_agent(final_state_snapshot, graph_runtime, agent)
+                    except Exception as exc:
+                        yield _sse("error", {"code": "agent_execution_failed", "message": str(exc)})
+                        raise
+                    if isinstance(next_state, dict):
+                        final_state_snapshot = {**final_state_snapshot, **next_state}
+                        candidate = next_state.get("final_answer") or next_state.get("draft_answer")
+                        if isinstance(candidate, str) and candidate.strip():
+                            final_answer = candidate
+            else:
+                async for event in graph.astream_events(initial_state, config=stream_config, version="v2"):
+                    event_name = event.get("event")
+                    if event_name == "on_chain_start":
+                        node = str(event.get("name", "unknown"))
+                        if node in {"router", "rag_expert", "code_architect", "review"}:
+                            yield _sse("agent_status", _status_from_node(node))
+                    elif event_name == "on_chain_end":
+                        data = event.get("data", {})
+                        if isinstance(data, dict):
+                            output = data.get("output", {})
+                            if isinstance(output, dict):
+                                final_state_snapshot = {**final_state_snapshot, **output}
+                                candidate = output.get("final_answer") or output.get("draft_answer")
+                                if isinstance(candidate, str) and candidate.strip():
+                                    final_answer = candidate
 
             final_answer = (
                 final_answer
@@ -417,7 +435,8 @@ async def stream_chat(request: Request, payload: ChatStreamRequest) -> Streaming
             )
 
             if not final_answer:
-                final_answer = "任务已完成。"
+                fallback = str(final_state_snapshot.get("rag_context") or "").strip()
+                final_answer = fallback or f"已处理请求：{payload.user_input}"
 
             for token in final_answer:
                 yield _sse("chunk", {"chunk": token})

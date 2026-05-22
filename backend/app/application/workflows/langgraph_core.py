@@ -19,6 +19,15 @@ class RetrievedDoc(TypedDict):
     score: float
 
 
+class AgentConfig(TypedDict, total=False):
+    id: str
+    name: str
+    kind: Literal["router", "rag", "generator", "review", "custom"]
+    prompt: str
+    enabled: bool
+    order: int
+
+
 class GraphState(TypedDict, total=False):
     session_id: str
     user_input: str
@@ -32,6 +41,7 @@ class GraphState(TypedDict, total=False):
     rag_prompt: str
     code_prompt: str
     review_prompt: str
+    agent_configs: list[AgentConfig]
     route: Literal["rag", "code", "direct"]
     needs_rag: bool
     retrieved_docs: list[RetrievedDoc]
@@ -69,11 +79,17 @@ class GraphRuntime:
     model_gateway: ModelGateway
     retriever: VectorRetriever
     max_rewrite_rounds: int = 2
+    agents: list[AgentConfig] | None = None
 
 
 ROUTER_SYSTEM_PROMPT = (
-    "你是 Router Agent（调度中枢）。"
-    "分析用户输入并只输出 JSON："
+    "你是任务分流助手。请先理解用户真实目标，再判断更适合："
+    "1) 需要知识库检索支持；2) 直接生成方案/内容；3) 普通直接回答。"
+    "请尽量用业务语言理解问题，不要依赖技术术语。"
+)
+
+ROUTER_OUTPUT_SCHEMA_HINT = (
+    "你必须只输出 JSON，格式为："
     '{"route":"rag|code|direct","reason":"...","needs_rag":true|false}。'
 )
 
@@ -109,6 +125,213 @@ def _safe_json(raw: str, fallback: dict[str, Any]) -> dict[str, Any]:
         return json.loads(raw)
     except Exception:
         return fallback
+
+
+def _default_agent_configs() -> list[AgentConfig]:
+    return [
+        {
+            "id": "router",
+            "name": "Router Agent",
+            "kind": "router",
+            "prompt": ROUTER_SYSTEM_PROMPT,
+            "enabled": True,
+            "order": 0,
+        },
+        {
+            "id": "rag",
+            "name": "RAG Expert Agent",
+            "kind": "rag",
+            "prompt": RAG_SYSTEM_PROMPT,
+            "enabled": True,
+            "order": 1,
+        },
+        {
+            "id": "generator",
+            "name": "Code Architect Agent",
+            "kind": "generator",
+            "prompt": CODE_ARCH_SYSTEM_PROMPT,
+            "enabled": True,
+            "order": 2,
+        },
+        {
+            "id": "review",
+            "name": "Review Agent",
+            "kind": "review",
+            "prompt": REVIEW_SYSTEM_PROMPT,
+            "enabled": True,
+            "order": 3,
+        },
+    ]
+
+
+def _normalize_agent_configs(raw_agents: list[dict[str, Any]] | list[AgentConfig] | None) -> list[AgentConfig]:
+    source = raw_agents or _default_agent_configs()
+    normalized: list[AgentConfig] = []
+    for idx, agent in enumerate(source):
+        kind = str(agent.get("kind", "custom")).strip().lower()
+        if kind not in {"router", "rag", "generator", "review", "custom"}:
+            kind = "custom"
+        normalized.append(
+            {
+                "id": str(agent.get("id") or f"agent-{idx}"),
+                "name": str(agent.get("name") or f"Agent {idx + 1}"),
+                "kind": kind,  # type: ignore[typeddict-item]
+                "prompt": str(agent.get("prompt") or ""),
+                "enabled": bool(agent.get("enabled", True)),
+                "order": int(agent.get("order", idx)),
+            }
+        )
+    normalized.sort(key=lambda item: item["order"])
+    return normalized
+
+
+def _default_prompt_for_kind(kind: str) -> str:
+    if kind == "router":
+        return ROUTER_SYSTEM_PROMPT
+    if kind == "rag":
+        return RAG_SYSTEM_PROMPT
+    if kind == "generator":
+        return CODE_ARCH_SYSTEM_PROMPT
+    if kind == "review":
+        return REVIEW_SYSTEM_PROMPT
+    return "你是一个通用 Agent，请根据用户需求给出有用、明确、可执行的回答。"
+
+
+def _summarize_docs(docs: list[RetrievedDoc]) -> str:
+    refs = "\n".join([f"- {d['source']} (score={d['score']:.4f})" for d in docs])
+    snippets = "\n\n".join([f"[{d['source']}] {d['content']}" for d in docs])
+    return f"检索片段：\n{snippets}\n\n引用来源：\n{refs}"
+
+
+def _meaningful_fallback(state: GraphState) -> str:
+    draft = str(state.get("draft_answer") or "").strip()
+    if draft:
+        return draft
+    rag_context = str(state.get("rag_context") or "").strip()
+    if rag_context:
+        return f"基于检索结果整理：\n{rag_context}"
+    return f"已处理请求：{state.get('user_input', '').strip() or '（空输入）'}"
+
+
+async def _run_dynamic_agent(state: GraphState, runtime: GraphRuntime, agent: AgentConfig) -> GraphState:
+    kind = str(agent.get("kind") or "custom")
+    name = str(agent.get("name") or "Agent")
+    prompt = str(agent.get("prompt") or _default_prompt_for_kind(kind))
+    enabled = bool(agent.get("enabled", True))
+    if not enabled:
+        return {"statuses": _append_status(state, name, "skipped", "已禁用，跳过执行")}
+
+    if kind == "router":
+        result = await runtime.model_gateway.ainvoke(
+            system_prompt=f"{prompt}\n\n{ROUTER_OUTPUT_SCHEMA_HINT}",
+            user_prompt=f"用户输入：{state['user_input']}",
+            provider=state.get("model_provider", "cloud"),
+            cloud_preset=state.get("cloud_preset", "aliyun"),
+            api_key=state.get("api_key"),
+            api_base=state.get("api_base"),
+            cloud_model=state.get("cloud_model"),
+            local_model=state.get("local_model"),
+        )
+        parsed = _safe_json(result, {"route": "direct", "needs_rag": False, "reason": "fallback"})
+        route = parsed.get("route", "direct")
+        if route not in {"rag", "code", "direct"}:
+            route = "direct"
+        reason = str(parsed.get("reason") or f"route={route}")
+        route_summary = f"路由结果：{route}；原因：{reason}"
+        return {
+            "route": route,  # type: ignore[typeddict-item]
+            "draft_answer": str(state.get("draft_answer") or route_summary),
+            "final_answer": str(state.get("final_answer") or route_summary),
+            "statuses": _append_status(state, name, "routed", route_summary),
+        }
+
+    if kind == "rag":
+        docs = await runtime.retriever.search(query=state["user_input"], top_k=5)
+        if docs:
+            context = _summarize_docs(docs)
+            user_prompt = f"问题：{state['user_input']}\n\n{context}"
+        else:
+            context = "未检索到可信资料。"
+            user_prompt = f"问题：{state['user_input']}\n\n请明确说明没有找到可信资料，并给出下一步建议。"
+
+        answer = await runtime.model_gateway.ainvoke(
+            system_prompt=prompt,
+            user_prompt=user_prompt,
+            provider=state.get("model_provider", "cloud"),
+            cloud_preset=state.get("cloud_preset", "aliyun"),
+            api_key=state.get("api_key"),
+            api_base=state.get("api_base"),
+            cloud_model=state.get("cloud_model"),
+            local_model=state.get("local_model"),
+        )
+        if not str(answer).strip():
+            if docs:
+                answer = f"基于知识库检索到以下内容：\n{context}"
+            else:
+                answer = "未检索到可信资料，无法给出基于知识库的结论。"
+        return {
+            "retrieved_docs": docs,
+            "rag_context": context,
+            "draft_answer": str(answer),
+            "final_answer": str(answer),
+            "statuses": _append_status(state, name, "searching", "已完成检索并生成回答"),
+        }
+
+    if kind in {"generator", "custom"}:
+        base = f"用户需求：{state['user_input']}"
+        if state.get("route"):
+            base += f"\n\n路由结果：{state['route']}"
+        if state.get("rag_context"):
+            base += f"\n\nRAG 上下文：\n{state['rag_context']}"
+        if state.get("draft_answer"):
+            base += f"\n\n前一轮草案：\n{state['draft_answer']}"
+        answer = await runtime.model_gateway.ainvoke(
+            system_prompt=prompt,
+            user_prompt=base,
+            provider=state.get("model_provider", "cloud"),
+            cloud_preset=state.get("cloud_preset", "aliyun"),
+            api_key=state.get("api_key"),
+            api_base=state.get("api_base"),
+            cloud_model=state.get("cloud_model"),
+            local_model=state.get("local_model"),
+        )
+        if not str(answer).strip():
+            answer = _meaningful_fallback(state)
+        return {
+            "draft_answer": str(answer),
+            "final_answer": str(answer),
+            "statuses": _append_status(state, name, "coding", "已生成回答草案"),
+        }
+
+    review_raw = await runtime.model_gateway.ainvoke(
+        system_prompt=prompt,
+        user_prompt=f"请审查以下输出：\n{state.get('draft_answer') or state.get('final_answer') or ''}",
+        provider=state.get("model_provider", "cloud"),
+        cloud_preset=state.get("cloud_preset", "aliyun"),
+        api_key=state.get("api_key"),
+        api_base=state.get("api_base"),
+        cloud_model=state.get("cloud_model"),
+        local_model=state.get("local_model"),
+    )
+    parsed = _safe_json(review_raw, {"approved": True, "issues": [], "suggestion": ""})
+    approved = bool(parsed.get("approved", True))
+    issues = parsed.get("issues", [])
+    suggestion = str(parsed.get("suggestion", "")).strip()
+    base_answer = _meaningful_fallback(state)
+    if approved:
+        final = base_answer
+        status_msg = "审核通过，输出最终结果"
+    else:
+        issue_text = "; ".join([str(i) for i in issues]) if isinstance(issues, list) else str(issues)
+        final = base_answer
+        if issue_text or suggestion:
+            final = f"{final}\n\n[Review建议] {issue_text or suggestion}"
+        status_msg = "发现问题，保留草案并附带审查建议"
+    return {
+        "review_passed": approved,
+        "final_answer": final,
+        "statuses": _append_status(state, name, "reviewing", status_msg),
+    }
 
 
 async def router_node(state: GraphState, runtime: GraphRuntime) -> GraphState:
