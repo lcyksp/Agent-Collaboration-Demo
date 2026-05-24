@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal EnableExtensions
 
 set "ROOT=%~dp0"
@@ -27,11 +27,12 @@ if not exist "%FRONTEND_DIR%\.env.local" (
 )
 
 echo [INFO] Launching backend and frontend...
-start "TechCopilot Backend" cmd /k ""%BACKEND_SCRIPT%""
-start "TechCopilot Frontend" cmd /k ""%FRONTEND_SCRIPT%""
+start "NexusAgent Backend" cmd /k ""%BACKEND_SCRIPT%""
+start "NexusAgent Frontend" cmd /k ""%FRONTEND_SCRIPT%""
 
 echo.
 echo [DONE] Windows opened.
 echo Backend:  http://127.0.0.1:%BACKEND_PORT%/healthz
 echo Frontend: http://127.0.0.1:%FRONTEND_PORT%
 endlocal
+

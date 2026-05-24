@@ -1,2 +1,3 @@
-"""Tech R&D Copilot backend package."""
+﻿"""NexusAgent Enterprise backend package."""
+
 

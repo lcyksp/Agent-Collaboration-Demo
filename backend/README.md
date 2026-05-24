@@ -1,4 +1,4 @@
-# Tech R&D Copilot Backend
+﻿# NexusAgent Enterprise Backend
 
 ## Suggested Structure
 
@@ -33,3 +33,4 @@ backend/
 ```bash
 uvicorn app.main:app --reload --app-dir backend
 ```
+

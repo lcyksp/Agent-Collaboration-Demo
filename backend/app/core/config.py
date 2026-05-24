@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = Field(default="Tech R&D Copilot Backend", description="App name.")
+    app_name: str = Field(default="NexusAgent Enterprise Backend", description="App name.")
     app_env: Literal["local", "dev", "staging", "prod"] = Field(default="dev")
     app_debug: bool = Field(default=False)
     app_version: str = Field(default="0.1.0")
@@ -54,3 +54,4 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Singleton settings provider."""
     return Settings()
+
